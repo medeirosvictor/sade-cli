@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/medeirosvictor/sade-cli/internal/tui"
 	"github.com/medeirosvictor/sade-cli/pkg/agent"
+	"github.com/medeirosvictor/sade-cli/pkg/arch"
 	"github.com/medeirosvictor/sade-cli/pkg/config"
 	"github.com/medeirosvictor/sade-cli/pkg/git"
 	"github.com/medeirosvictor/sade-cli/pkg/upkeep"
@@ -168,6 +169,15 @@ SADE architectural documentation.
     sade status     # show config
 `
 		os.WriteFile(readmePath, []byte(readme), 0644)
+	}
+
+	// Create empty architecture.json (used by GUI/webapp graph view)
+	archPath := paths.Arch
+	if _, err := os.Stat(archPath); os.IsNotExist(err) {
+		emptyArch := arch.Empty()
+		if err := arch.SaveArch(projectRoot, emptyArch); err != nil {
+			fmt.Printf("⚠ Could not create architecture.json: %v\n", err)
+		}
 	}
 
 	fmt.Println("✓ Created .sade/ directory")
