@@ -1,0 +1,7 @@
+{
+  "agent": "pi",
+  "pulse_ms": 15000,
+  "housekeeping_ms": 1800000,
+  "pulse_enabled": true,
+  "housekeeping_enabled": true
+}
