@@ -64,14 +64,15 @@ func LoadArch(projectRoot string) (*Architecture, error) {
 }
 
 func ArchExists(projectRoot string) bool {
-  path := filepath.Join(projectroot, ".sade", "architecture.json")
+  path := filepath.Join(projectRoot, ".sade", "architecture.json")
   _, err := os.Stat(path)
   return err == nil 
 }
 
-func hasNodes(projectRoot string) bool {
+func HasNodes(projectRoot string) bool {
   path := filepath.Join(projectRoot, ".sade/nodes")
   entries, err := os.ReadDir(path)
+	if err != nil { return false }
   return len(entries) > 0
 }
 

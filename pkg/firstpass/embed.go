@@ -2,5 +2,8 @@ package firstpass
 
 import _ "embed"
 
-//go:embed first-pass-prompt.md
-var SystemPrompt string
+//go:embed nodes-prompt.md
+var NodesPrompt string
+
+//go:embed graph-prompt.md
+var GraphPrompt string

@@ -253,7 +253,10 @@ func runWatchLoop(projectRoot string, cfg *config.Config) {
 
 	w.Run()
 
-	runner := agent.NewRunner()
+	ag, err := agent.NewAgent(cfg.Agent, projectRoot)
+	if err != nil {
+		fatal("Could not create agent: %v", err)
+	}
 
 	var lastEvent time.Time
 	pulseTimer := time.NewTimer(time.Hour)
@@ -285,7 +288,7 @@ func runWatchLoop(projectRoot string, cfg *config.Config) {
 			}
 
 		case <-pulseTimer.C:
-			if !cfg.PulseEnabled || runner.IsRunning() {
+			if !cfg.PulseEnabled || ag.IsRunning() {
 				continue
 			}
 
@@ -296,10 +299,10 @@ func runWatchLoop(projectRoot string, cfg *config.Config) {
 			fmt.Println()
 			fmt.Println("⚡ Pulse: triggering documentation update...")
 
-			go runPulse(runner, cfg.Agent, projectRoot)
+			go runPulse(ag, projectRoot)
 
 		case <-housekeepingTicker.C:
-			if !cfg.HousekeepingEnabled || runner.IsRunning() {
+			if !cfg.HousekeepingEnabled || ag.IsRunning() {
 				continue
 			}
 
@@ -311,13 +314,17 @@ func runWatchLoop(projectRoot string, cfg *config.Config) {
 			fmt.Println("🧹 Housekeeping: running periodic maintenance...")
 			changesSinceUpkeep = false
 
-			go runHousekeeping(runner, cfg.Agent, projectRoot)
+			go runHousekeeping(ag, projectRoot)
 		}
 	}
 }
 
 func runEventLoop(w *watcher.Watcher, p *tea.Program, cfg *config.Config, projectRoot string) {
-	runner := agent.NewRunner()
+	ag, err := agent.NewAgent(cfg.Agent, projectRoot)
+	if err != nil {
+		return // can't create agent, stop event loop
+	}
+
 	var lastEvent time.Time
 	pulseTimer := time.NewTimer(time.Hour)
 	pulseTimer.Stop()
@@ -348,7 +355,7 @@ func runEventLoop(w *watcher.Watcher, p *tea.Program, cfg *config.Config, projec
 			}
 
 		case <-pulseTimer.C:
-			if !cfg.PulseEnabled || runner.IsRunning() {
+			if !cfg.PulseEnabled || ag.IsRunning() {
 				continue
 			}
 
@@ -356,10 +363,10 @@ func runEventLoop(w *watcher.Watcher, p *tea.Program, cfg *config.Config, projec
 				continue
 			}
 
-			go runPulse(runner, cfg.Agent, projectRoot)
+			go runPulse(ag, projectRoot)
 
 		case <-housekeepingTicker.C:
-			if !cfg.HousekeepingEnabled || runner.IsRunning() {
+			if !cfg.HousekeepingEnabled || ag.IsRunning() {
 				continue
 			}
 
@@ -368,12 +375,12 @@ func runEventLoop(w *watcher.Watcher, p *tea.Program, cfg *config.Config, projec
 			}
 
 			changesSinceUpkeep = false
-			go runHousekeeping(runner, cfg.Agent, projectRoot)
+			go runHousekeeping(ag, projectRoot)
 		}
 	}
 }
 
-func runPulse(runner *agent.Runner, agentID, projectRoot string) {
+func runPulse(ag *agent.Agent, projectRoot string) {
 	paths := config.GetPaths(projectRoot)
 
 	ctx, err := upkeep.BuildPulseContext(projectRoot)
@@ -382,28 +389,26 @@ func runPulse(runner *agent.Runner, agentID, projectRoot string) {
 		return
 	}
 
-	promptFile, err := upkeep.WriteTempPrompt(projectRoot, paths.PulsePrompt, ctx)
+	promptBytes, err := os.ReadFile(paths.PulsePrompt)
 	if err != nil {
-		fmt.Printf("  ⚠ Could not write prompt: %v\n", err)
+		fmt.Printf("  ⚠ Could not read pulse prompt: %v\n", err)
+		return
+	}
+	prompt := string(promptBytes) + "\n\n---\n\n" + ctx
+
+	_, err = ag.Run(agent.Task{
+		Name:   "pulse",
+		Prompt: prompt,
+	})
+	if err != nil {
+		fmt.Printf("  ⚠ Pulse error: %v\n", err)
 		return
 	}
 
-	result, err := runner.Invoke(agentID, projectRoot, promptFile)
-	if err != nil {
-		fmt.Printf("  ⚠ Agent error: %v\n", err)
-		return
-	}
-
-	if result.ExitCode == 0 {
-		fmt.Println("  ✓ Pulse complete")
-	} else {
-		fmt.Printf("  ⚠ Agent exited with code %d\n", result.ExitCode)
-	}
-
-	upkeep.CleanupTempPrompts(projectRoot)
+	fmt.Println("  ✓ Pulse complete")
 }
 
-func runHousekeeping(runner *agent.Runner, agentID, projectRoot string) {
+func runHousekeeping(ag *agent.Agent, projectRoot string) {
 	paths := config.GetPaths(projectRoot)
 
 	ctx, err := upkeep.BuildHousekeepContext(projectRoot)
@@ -412,25 +417,23 @@ func runHousekeeping(runner *agent.Runner, agentID, projectRoot string) {
 		return
 	}
 
-	promptFile, err := upkeep.WriteTempPrompt(projectRoot, paths.HousekeepPrompt, ctx)
+	promptBytes, err := os.ReadFile(paths.HousekeepPrompt)
 	if err != nil {
-		fmt.Printf("  ⚠ Could not write prompt: %v\n", err)
+		fmt.Printf("  ⚠ Could not read housekeeping prompt: %v\n", err)
+		return
+	}
+	prompt := string(promptBytes) + "\n\n---\n\n" + ctx
+
+	_, err = ag.Run(agent.Task{
+		Name:   "housekeeping",
+		Prompt: prompt,
+	})
+	if err != nil {
+		fmt.Printf("  ⚠ Housekeeping error: %v\n", err)
 		return
 	}
 
-	result, err := runner.Invoke(agentID, projectRoot, promptFile)
-	if err != nil {
-		fmt.Printf("  ⚠ Agent error: %v\n", err)
-		return
-	}
-
-	if result.ExitCode == 0 {
-		fmt.Println("  ✓ Housekeeping complete")
-	} else {
-		fmt.Printf("  ⚠ Agent exited with code %d\n", result.ExitCode)
-	}
-
-	upkeep.CleanupTempPrompts(projectRoot)
+	fmt.Println("  ✓ Housekeeping complete")
 }
 
 func cmdStatus() {

@@ -4,6 +4,7 @@ package agent
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -27,9 +28,103 @@ type Provider struct {
 type Agent struct {
   Provider Provider
   Root     string
+  mu       sync.Mutex
+  running  bool
 }
 
+// IsRunning returns true if the agent is currently executing a task.
+func (a *Agent) IsRunning() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.running
+}
 
+func NewAgent(providerID, projectRoot string) (*Agent, error) {
+	if providerID == "" {
+		return nil, fmt.Errorf("providerID cannot be empty")
+	}
+	if projectRoot == "" {
+		return nil, fmt.Errorf("projectRoot cannot be empty")
+	}
+
+	provider := GetProvider(providerID)
+	if provider == nil {
+		return nil, fmt.Errorf("unknown provider: %s", providerID)
+	}
+
+	return &Agent {
+		Provider: *provider,
+		Root: projectRoot,
+	}, nil
+}
+
+func (a *Agent) Run(task Task) (*Result, error) {
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("agent already running")
+	}
+	a.running = true
+	a.mu.Unlock()
+
+	defer func() {
+		a.mu.Lock()
+		a.running = false
+		a.mu.Unlock()
+	}()
+
+	tmpFile, err := os.CreateTemp("", "sade-task-*.md")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp prompt: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	if _, err := tmpFile.WriteString(task.Prompt); err != nil {
+		tmpFile.Close()
+		return nil, fmt.Errorf("writing prompt: %w", err)
+	}
+	tmpFile.Close()
+
+	args := append([]string{}, a.Provider.Args...)
+	switch a.Provider.ID {
+	case "pi", "claude":
+		args = append(args, "@"+tmpFile.Name())
+	case "aider":
+		args = append(args, "--message-file", tmpFile.Name())
+	default:
+		args = append(args, tmpFile.Name())
+	}
+
+	cmd := exec.Command(a.Provider.Cmd, args...)
+	cmd.Dir = a.Root
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+
+	result := &Result{
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
+	}
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			result.Err = err
+			return result, fmt.Errorf("running %s: %w\nstdout: %s\nstderr: %s", a.Provider.Name, err, result.Stdout, result.Stderr)
+		}
+	}
+
+	if task.Validate != nil {
+		if err := task.Validate(); err != nil {
+			return result, fmt.Errorf("task %q validation failed: %w\nstdout: %s\nstderr: %s", task.Name, err, result.Stdout, result.Stderr)
+		}
+	}
+
+	return result, nil
+}
 
 var providers = []Provider{
 	{
@@ -37,7 +132,7 @@ var providers = []Provider{
 		Name:  "pi",
 		Cmd:   "pi",
 		Check: "--version",
-		Args:  []string{"-p", "--append-system-prompt"},
+		Args:  []string{"-p"},
 	},
 	{
 		ID:    "claude",
@@ -145,80 +240,3 @@ type Result struct {
 	Err      error
 }
 
-// Runner manages agent invocations
-type Runner struct {
-	mu        sync.Mutex
-	running   bool
-	currentID string
-}
-
-// NewRunner creates a new agent runner
-func NewRunner() *Runner {
-	return &Runner{}
-}
-
-// IsRunning returns true if an agent is currently running
-func (r *Runner) IsRunning() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.running
-}
-
-// Invoke runs the agent with the given prompt file
-func (r *Runner) Invoke(agentID, projectRoot, promptFile string) (*Result, error) {
-	r.mu.Lock()
-	if r.running {
-		r.mu.Unlock()
-		return nil, fmt.Errorf("agent already running: %s", r.currentID)
-	}
-	r.running = true
-	r.currentID = agentID
-	r.mu.Unlock()
-
-	defer func() {
-		r.mu.Lock()
-		r.running = false
-		r.currentID = ""
-		r.mu.Unlock()
-	}()
-
-	provider := GetProvider(agentID)
-	if provider == nil {
-		return nil, fmt.Errorf("unknown agent: %s", agentID)
-	}
-
-	args := append([]string{}, provider.Args...)
-
-	switch agentID {
-	case "pi", "claude":
-		args = append(args, "@"+promptFile)
-	case "aider":
-		args = append(args, "--message-file", promptFile)
-	default:
-		args = append(args, promptFile)
-	}
-
-	cmd := exec.Command(provider.Cmd, args...)
-	cmd.Dir = projectRoot
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-
-	result := &Result{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
-	}
-
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			result.Err = err
-		}
-	}
-
-	return result, nil
-}
