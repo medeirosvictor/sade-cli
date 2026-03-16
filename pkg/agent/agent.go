@@ -9,6 +9,12 @@ import (
 	"sync"
 )
 
+type Task struct {
+  Name     string
+  Prompt   string
+  Validate func() error
+}
+
 // Provider defines a coding agent CLI
 type Provider struct {
 	ID    string
@@ -17,6 +23,13 @@ type Provider struct {
 	Check string   // Arg to check version (e.g., "--version")
 	Args  []string // Base args for non-interactive mode
 }
+
+type Agent struct {
+  Provider Provider
+  Root     string
+}
+
+
 
 var providers = []Provider{
 	{

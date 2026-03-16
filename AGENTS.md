@@ -11,7 +11,9 @@ sade-cli/
 │   ├── agent/             # Agent detection + invocation
 │   ├── arch/              # architecture.json + nodes/*.md
 │   ├── config/            # .sade/config.json
+│   ├── firstpass/         # First-pass architecture generation (shared)
 │   ├── git/               # Git status + diff
+│   ├── scaffold/          # .sade/ directory scaffolding (shared)
 │   ├── upkeep/            # Pulse + housekeeping prompts
 │   └── watcher/           # File system watching
 └── internal/              # CLI-specific (not importable)
@@ -21,7 +23,7 @@ sade-cli/
 ## Commands
 
 ```
-sade start       # Scaffold (if needed) + select agent + watch
+sade start       # Scaffold → agent selection → first-pass (if empty) → watch
 sade start -i    # Same but with interactive TUI
 sade status      # Show config
 ```

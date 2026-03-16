@@ -11,9 +11,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/medeirosvictor/sade-cli/internal/tui"
 	"github.com/medeirosvictor/sade-cli/pkg/agent"
-	"github.com/medeirosvictor/sade-cli/pkg/arch"
 	"github.com/medeirosvictor/sade-cli/pkg/config"
+	"github.com/medeirosvictor/sade-cli/pkg/firstpass"
 	"github.com/medeirosvictor/sade-cli/pkg/git"
+	"github.com/medeirosvictor/sade-cli/pkg/scaffold"
 	"github.com/medeirosvictor/sade-cli/pkg/upkeep"
 	"github.com/medeirosvictor/sade-cli/pkg/watcher"
 )
@@ -58,7 +59,6 @@ Usage:
   sade start         Start watching (scaffolds .sade/ if needed)
   sade start -i      Start with interactive TUI
   sade status        Show current configuration
-  sade version       Show version
 
 Examples:
   cd your-project && sade start
@@ -74,10 +74,25 @@ func cmdStart(interactive bool) {
 	projectRoot := config.FindRoot(cwd)
 	var cfg *config.Config
 
-	// Scaffold if needed
+	// ── Step 1: Scaffold ──────────────────────────────────────────────
 	if projectRoot == "" {
 		projectRoot = cwd
-		cfg = ensureScaffolded(projectRoot)
+
+		if !git.IsRepo(projectRoot) {
+			fmt.Println("⚠ Warning: Not a git repository. SADE works best with git.")
+			fmt.Println()
+		}
+
+		fmt.Println("╭─────────────────────────────────────────╮")
+		fmt.Println("│           SADE Initialization           │")
+		fmt.Println("╰─────────────────────────────────────────╯")
+		fmt.Println()
+
+		cfg, err = scaffold.Init(projectRoot, "")
+		if err != nil {
+			fatal("Scaffolding failed: %v", err)
+		}
+		fmt.Println("✓ Created .sade/ directory")
 	} else {
 		cfg, err = config.Load(projectRoot)
 		if err != nil {
@@ -85,7 +100,7 @@ func cmdStart(interactive bool) {
 		}
 	}
 
-	// Ensure agent is selected
+	// ── Step 2: Agent selection ───────────────────────────────────────
 	if cfg.Agent == "" {
 		cfg = ensureAgent(projectRoot, cfg)
 	}
@@ -96,9 +111,37 @@ func cmdStart(interactive bool) {
 		cfg = ensureAgent(projectRoot, cfg)
 	}
 
+	// ── Step 3: First-pass if architecture is empty ───────────────────
+	if firstpass.NeedsFirstPass(projectRoot) {
+		fmt.Println()
+		fmt.Println("No architecture documentation found. Running first-pass…")
+		fmt.Println()
+
+		architecture, err := firstpass.Run(firstpass.Options{
+			ProjectRoot: projectRoot,
+			AgentID:     cfg.Agent,
+			Progress: func(kind, msg string) {
+				if kind == "stderr" {
+					fmt.Printf("  ⚠ %s\n", msg)
+				} else {
+					fmt.Printf("  %s\n", msg)
+				}
+			},
+		})
+		if err != nil {
+			fmt.Printf("\n⚠ First-pass failed: %v\n", err)
+			fmt.Println("  You can run 'sade start' again later to retry.")
+			fmt.Println("  Continuing to watch mode…")
+			fmt.Println()
+		} else {
+			fmt.Printf("\n✓ First-pass complete: %d nodes, %d edges\n\n",
+				len(architecture.Nodes), len(architecture.Edges))
+		}
+	}
+
+	// ── Step 4: Watch ─────────────────────────────────────────────────
 	provider := agent.GetProvider(cfg.Agent)
 
-	fmt.Println()
 	fmt.Println("╭─────────────────────────────────────────╮")
 	fmt.Println("│              SADE Watcher               │")
 	fmt.Println("╰─────────────────────────────────────────╯")
@@ -118,71 +161,6 @@ func cmdStart(interactive bool) {
 		fmt.Println()
 		runWatchLoop(projectRoot, cfg)
 	}
-}
-
-func ensureScaffolded(projectRoot string) *config.Config {
-	fmt.Println("╭─────────────────────────────────────────╮")
-	fmt.Println("│           SADE Initialization           │")
-	fmt.Println("╰─────────────────────────────────────────╯")
-	fmt.Println()
-
-	if !git.IsRepo(projectRoot) {
-		fmt.Println("⚠ Warning: Not a git repository. SADE works best with git.")
-		fmt.Println()
-	}
-
-	cfg := config.Default()
-
-	if err := config.EnsureDirs(projectRoot); err != nil {
-		fatal("Could not create directories: %v", err)
-	}
-
-	if err := upkeep.EnsurePromptFiles(projectRoot); err != nil {
-		fatal("Could not create prompt files: %v", err)
-	}
-
-	// Create README
-	paths := config.GetPaths(projectRoot)
-	readmePath := paths.SadeDir + "/README.md"
-	if _, err := os.Stat(readmePath); os.IsNotExist(err) {
-		readme := `# .sade/
-
-SADE architectural documentation.
-
-## Files
-
-- config.json — agent + timing settings
-- architecture.json — graph structure (nodes + edges)
-- nodes/*.md — documentation per responsibility
-- pulse-prompt.md — instructions for reactive updates
-- housekeeping-prompt.md — instructions for periodic maintenance
-
-## Locks
-
-- Add {locked} at the top of any nodes/*.md to protect it
-- Set "locked": true on nodes/edges in architecture.json
-
-## Commands
-
-    sade start      # background mode
-    sade start -i   # interactive TUI
-    sade status     # show config
-`
-		os.WriteFile(readmePath, []byte(readme), 0644)
-	}
-
-	// Create empty architecture.json (used by GUI/webapp graph view)
-	archPath := paths.Arch
-	if _, err := os.Stat(archPath); os.IsNotExist(err) {
-		emptyArch := arch.Empty()
-		if err := arch.SaveArch(projectRoot, emptyArch); err != nil {
-			fmt.Printf("⚠ Could not create architecture.json: %v\n", err)
-		}
-	}
-
-	fmt.Println("✓ Created .sade/ directory")
-
-	return cfg
 }
 
 func ensureAgent(projectRoot string, cfg *config.Config) *config.Config {

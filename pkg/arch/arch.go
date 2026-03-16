@@ -63,6 +63,18 @@ func LoadArch(projectRoot string) (*Architecture, error) {
 	return &arch, nil
 }
 
+func ArchExists(projectRoot string) bool {
+  path := filepath.Join(projectroot, ".sade", "architecture.json")
+  _, err := os.Stat(path)
+  return err == nil 
+}
+
+func hasNodes(projectRoot string) bool {
+  path := filepath.Join(projectRoot, ".sade/nodes")
+  entries, err := os.ReadDir(path)
+  return len(entries) > 0
+}
+
 // Empty returns an empty architecture
 func Empty() *Architecture {
 	return &Architecture{
